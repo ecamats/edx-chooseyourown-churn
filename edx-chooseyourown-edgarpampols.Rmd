@@ -1,0 +1,995 @@
+---
+title: 'HarvardX PH125.9x Data Science: Capstone - Telco Churn Prediction'
+author: "Edgar Pampols"
+date: "7/13/2021"
+output:
+  pdf_document: 
+    number_sections: yes
+    toc: yes
+  html_document: default
+---
+
+```{r setup, fig.align='center',include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\newpage
+
+# Introduction to the project
+
+This report is written within the frame of the "HarvardX - PH125.9x Data Science - Capstone" course. The ojective is to choose a project, and apply machine data learning techniques that go beyond standard linear regression. The project chosen is to predict customer churn for a Telco company, based on a dataset made available at Kaggle.com by BlastChar: https://www.kaggle.com/blastchar/telco-customer-churn
+
+Telco companies spend a lot in the process of acquiring customers, hence the importance of predicting churn and mitigating it if possible. The aim of the project will be to test multiple classification algorithms with the aim of predicting churners, and then have a sensible plan to retain those customers with a positive total company impact.
+
+A typical way of retaining potential churners is to offer discounts, however offering a discount to a wrongly predicted churner will also dilute the companies revenues. In this project it is crucial to "cover a maximum of churners" but also "offer discounts to a minimum of non-churners".
+
+# Summary of achieved results
+
+The dataset has been first slighlty cleaned and adapted. Next, it has been partitioned into "training","test" & "validation" partitions, the last one will only be used to compute the result of a final model, and not for training, tuning nor choosing models.
+
+The sequence of this project will then consist on i) exploring different models, ii) evaluate them on the "test" partition accross different metrics, iii) decide for a final model and evaluate its performance on the "validation" set. To compare the different performance of the models, as well as computing the final result, multiple aspects of the "confusion matrix" will be used, such as Accuracy, Precision and Recall.
+
+After some initial data exploration of the data properties, and the construction of multiple models based on the course material and extra research, the model of choice will be "gamLoess". The accuracy of the model is among the highest (81%) and has also a balanced precision (66%) vs. recall (57%).
+
+This type of model will not only provide a predicted churn ("Yes" or "No"), but also will provide a probability of every customer to churn (between 0 and 1). In a real world situation, this allows us to rank the predictions, and demonstrate that our model would rather be applied only to the first 3 deciles (ordering by predicted churn probability) in order not to cannibalize existing revenues of the lower deciles. Our simulation reveals potential for saving 4.8% of the Telco's revenues.
+
+The final complete results on the validation test show an accuracy of 81%, precision of 68% and recall of 53% and the simulation shows also how targetting the first 3 deciles only with a discounted offer would be the best thing to do. All in all, the Telco company will have saved about 4.5% of their revenues by applying the model on the validation data set.
+
+# Data Loading, Preparation and Exploratory analysis
+
+## Initial data loading
+
+The dataset used for this project has been uploaded into the following github repository:
+
+https://raw.githubusercontent.com/ecamats/edx-chooseyourown-churn/main/data/WA_Fn-UseC_-Telco-Customer-Churn.csv
+
+```{r , echo=FALSE, include=FALSE, warning=FALSE, message=FALSE}
+##########################################################
+# Loading of useful libraries and source file on github repo
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(stringr)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(GGally)) install.packages("GGally", repos = "http://cran.us.r-project.org")
+if(!require(treemapify)) install.packages("treemapify", repos = "http://cran.us.r-project.org")
+if(!require(naivebayes)) install.packages("naivebayes", repos = "http://cran.us.r-project.org")
+if(!require(kernlab)) install.packages("kernlab", repos = "http://cran.us.r-project.org")
+if(!require(gam)) install.packages("gam", repos = "http://cran.us.r-project.org")
+if(!require(Rborist)) install.packages("Rborist", repos = "http://cran.us.r-project.org")
+if(!require(fastAdaboost)) install.packages("fastAdaboost", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(DiagrammeR)) install.packages("DiagrammeR", repos = "http://cran.us.r-project.org")
+if(!require(pROC)) install.packages("pROC", repos = "http://cran.us.r-project.org")
+
+# Added some extra useful libraries that can come handy
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(GGally)
+library(treemapify)
+library(naivebayes)
+library(kernlab)
+library(gam)
+library(Rborist)
+library(fastAdaboost)
+library(randomForest)
+library(DiagrammeR)
+library(pROC)
+
+#import Telco Churn dataset:
+#https://raw.githubusercontent.com/ecamats/edx-chooseyourown-churn/main/data/WA_Fn-UseC_-Telco-Customer-Churn.csv
+
+raw_churn <- read.csv("https://raw.githubusercontent.com/ecamats/edx-chooseyourown-churn/main/data/WA_Fn-UseC_-Telco-Customer-Churn.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+```
+After installing and loading some handy packages, and downloading the data, here's a glipmse of the raw dataset and its original 21 variables labelling:
+
+```{r , echo=FALSE, include=TRUE, warning=FALSE, message=FALSE}
+str(raw_churn,strict.width="cut")
+```
+Basically each record represents a unique subscriber monthly data, with a series of demographic information, or some Telco data such as tenure, contract duration and charges. Multiple "Yes/No" flags and categorical variables are also available describing which type of products and services the subscriber has subscribed to.
+
+The complete dataset consists of 7,043 subscribers.
+
+## Further data preparation and partitioning
+
+In order to easily uniform data for exploration purposes we defined a couple of handy functions:
+
+```{r, echo=FALSE, include=FALSE, warning=FALSE, message=FALSE}
+#simple functions to turn some Yes/No variables into 1's
+#and zero's for better treatment or visualization later on
+```
+```{r, echo = TRUE, include = TRUE}
+YesToOneFunction <- function(x){
+  ifelse(x=="Yes", 1,0)
+}
+
+NoServiceToNo <- function(x){
+  ifelse(x=="Yes", "Yes","No")
+}
+```
+```{r, echo = FALSE, include = FALSE, message = FALSE, warning = FALSE}
+
+
+#general cleaning and transformation of certain variables aiming to an easier data exploration
+#drop of records with NAs on Total charges since they are a minority
+#adding new derivated variables such as contract completion rate...
+
+transformed_churn <- raw_churn %>% 
+  drop_na() %>%
+  mutate(across(c(MultipleLines,OnlineSecurity:StreamingMovies), NoServiceToNo)) %>%
+  mutate(tenure_years = tenure/12,
+         Contract_length = ifelse(Contract == "Month-to-month",1,
+                                  ifelse(Contract == "One year",12,24)),
+         Contract_cycles = tenure/Contract_length,
+         Contract_remainig = Contract_length*(1-Contract_cycles%%1),
+         Contract_completion = round(Contract_cycles%%1*10)/10) %>%
+  select(Churn, gender:TotalCharges,tenure_years:Contract_completion)
+
+```
+
+Before getting into exploration and modeling, a few mutations and reformatting of the data have been done to ease the analysis:
+
+* Removal of 11 records containing NAs (too small of a portion to worry about them)
+* Uniforming product flags for better visualization (mix of 1/0's and Yes/No fiels)
+* Creation of new "insightful variables" (i.e. % of current contract completion)
+
+In terms of data partitioning, we will split the clean dataset into three parts:
+
+* A part for "validation" as 20% of all dataset, this will be used as final hold-out test
+* The remaing 80% will be further split into a 20% for "testing" and 80% for "training"
+
+```{r, echo=FALSE, include=FALSE, warning=FALSE, message=FALSE}
+##########################################################
+# Defining data partitions indexes for validation, training and test
+##########################################################
+
+set.seed(2021, sample.kind="Rounding")
+```
+```{r, echo=TRUE, include=TRUE}
+#split of validation set out of the initial set
+
+val_index <- createDataPartition(transformed_churn$Churn, times = 1, p = 0.2, list = FALSE)
+clean_churn = transformed_churn %>% dplyr::slice(-val_index)
+
+#clean_churn set will be kept for exploration purposes keeping original labels
+
+test_index <- createDataPartition(clean_churn$Churn, times = 1, p = 0.2, list = FALSE)
+
+#re-split of the non-validation part into training and test
+```
+
+For exploration purposes we will use the data as previously prepared, that's for all except "validation" data (please note we are treating validation set as an unknown portion of data till the final test). However, since we want to test multiple models using the convenience of "caret package" we will do a further transformation to all sets.
+
+This will be particularly relevant for categorical variables that will be transformed into "dummy variables" consisting on 1's or 0's for every class in that variable. We can use the "dummyVars" function for that purpose, and our data will be ready to apply to several models at once.
+
+```{r, echo=FALSE, include=FALSE, warning=FALSE, message=FALSE}
+##########################################################
+# Creating dummy variables for all partitions for better model handling
+##########################################################
+
+y <- as.factor(transformed_churn$Churn)
+y <- relevel(y, ref = "Yes")
+```
+```{r, echo=TRUE, include=TRUE}
+dummies_model <- dummyVars(Churn ~ ., data=transformed_churn, fullRank = TRUE)
+transformed_churn_mat <- predict(dummies_model, newdata = transformed_churn)
+
+transformed_churn <- data.frame(transformed_churn_mat)
+transformed_churn$Churn <- y
+
+str(transformed_churn,strict.width="cut")
+
+val_churn = transformed_churn %>% dplyr::slice(val_index)
+model_churn = transformed_churn %>% dplyr::slice(-val_index)
+
+test_set = model_churn %>% dplyr::slice(test_index)
+train_set = model_churn %>% dplyr::slice(-test_index)
+```
+
+## Selected exploratory analysis
+
+Since the event we are trying to predict / prevent has a binary outcome "Yes" or "No" it will come handy to define an event rate, that we will call "churn rate". Churn rate is defined as the proportion of subscribers churning out of a group or a segment.
+
+For example, in the code below we can see that, out of the 5,625 subscribers in our dataset (we have excluded "validation" here), 1,495 will churn. This leads to an average "churn rate" in our dataset of 0.266 or ~27%.
+```{r, echo=FALSE, include=TRUE,fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+##########################################################
+# Event definition and deep exploratory analysis
+##########################################################
+
+#definition of the event and key exploration metric --> churn_rate
+
+clean_churn %>% group_by(Churn) %>% summarise(n = n()) %>% spread(Churn,n,fill=0) %>%
+  mutate(CustomerCount=No+Yes, churn_rate=Yes/CustomerCount) 
+
+avg_churn <- clean_churn %>% group_by(Churn) %>% summarise(n = n()) %>% spread(Churn,n,fill=0) %>%
+  mutate(CustomerCount=No+Yes, churn_rate=Yes/CustomerCount) %>% pull(churn_rate)
+```
+Following this logic, we can slice our data in different dimensions and compare the "churn rates" accordingly, like in the below example showing gender split. In here we see that "Female" customers have a slightly higher churn rate than "Male" customers.
+```{r, echo=FALSE, include=TRUE,fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+clean_churn %>% group_by(Churn, gender) %>% summarise(n = n()) %>% spread(Churn,n, fill=0) %>%
+  mutate(CustomerCount=No+Yes, churn_rate=Yes/CustomerCount) %>% knitr::kable()
+
+```
+To explore both the distribution and the churn rate among different socio-demographic variables, we will use the handy "geom_tree" plot. It seems clear that "Senior citizens" have higher churn rates, and this phenomena is exaggerated in the case of 1-person households, without partner nor dependents (where churn rates are around ~50%, that's double the base average).
+
+```{r, echo=FALSE, fig.align='center', out.width = "70%",warning=FALSE, message=FALSE}
+#explore the demographics in absolute numbers and also their churn rates
+
+clean_churn %>% mutate(SeniorCitizen = ifelse(SeniorCitizen == 1,"Senior","Youngster"),
+                       Partner = ifelse(Partner == "Yes","with partner","alone"),
+                       Dependents = ifelse(Dependents == "Yes","with dependents","")) %>%
+  group_by(SeniorCitizen, Partner,Dependents,Churn) %>% summarize(n = n()) %>% 
+  spread(Churn,n, fill=0) %>% mutate(CustomerCount=No+Yes, churn_rate=Yes/CustomerCount) %>%
+  ggplot(aes(area=CustomerCount, label = paste(SeniorCitizen,Partner,Dependents,sep="\n",
+                                               paste("(",as.character(CustomerCount),")",sep="")),
+             subgroup=SeniorCitizen, subgroup2=Partner, subgroup3=Dependents, fill = churn_rate)) +
+  geom_treemap() +
+  geom_treemap_subgroup3_border(colour = "white", size = 2) +
+  geom_treemap_text( colour = "white", place = "centre", grow = FALSE) +
+  scale_fill_viridis_c() +
+  ggtitle("Churn rate and number of customers by demographic group") +
+  xlab("Area = number of subscribers") + labs(fill = "Churn rate")
+
+#demographics play a significant role in churn with older alone population driving churn
+#inversely younger population with partner and dependents have the lowest churn
+```
+The Telco customer base is predominantly composed by customers under monthly "pay as you go" contracts, that have a rather low tenure at this time of measurement. It doesn't come as a surprise that the churn rate of monthly contracts is far superior to the one of 1-2 year contracts (the red line indicates the average churn rate of the base). In fact the customer groups with low tenure have the highest churn rates.
+```{r, echo=FALSE, fig.align='center', out.width = "75%", warning=FALSE, message=FALSE}
+#exploring the churn rate levels accross key variables
+
+clean_churn %>% ggplot(aes(x=tenure, y=..count.., fill=Contract)) + geom_density(position = "stack")
+
+#the customer based is composed predominantly of monthly customers with low tenure
+
+clean_churn %>% group_by(Churn, Contract,tenure) %>% summarise(n = n()) %>% spread(Churn,n,fill=0) %>%
+  mutate(CustomerCount=No+Yes, churn_rate=Yes/CustomerCount) %>%
+  ggplot(aes(x=tenure, y=churn_rate)) + geom_smooth() + geom_point() +
+  geom_hline(yintercept=avg_churn, linetype="dashed", color = "red") +
+  facet_wrap(Contract ~ ., scales = "free_x")
+
+#for monthly contracts the churn rate is higher for low tenure indicating early churn phenomena
+#yearly or 2-year contracts have lower churn and seem to increase churn a later period
+```
+We now will take a look at the product-related information in the dataset. First we observe that each customer can have a different number of combined services:
+
+* Two main services "Phone" & "Internet" (in different supports like "DSL" or "Fiber Optics")
+* A series of "optional" services or add-ons (Online Backup, Streamin Movies or Multiple Lines...)
+* Add-ons are conditional to some underlying services (i.e. to get Multiple Lines, Phone is needed)
+
+The popularity (or penetration in the base) of those add-ons oscillates between 30-40% of the base, which means they all could be meaningful for our analysis.
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+clean_churn %>% 
+  mutate(across(c(PhoneService:MultipleLines,OnlineSecurity:StreamingMovies), YesToOneFunction)) %>%
+  mutate(InternetService = ifelse(InternetService == "No",0,1)) %>%
+  summarize(across(PhoneService:StreamingMovies,mean)) %>%
+  gather(key = Service, value = Penetration) %>%
+  ggplot(aes(x = reorder(Service,Penetration), y = Penetration)) + geom_col() + coord_flip() +
+  ylab("Service Penetration")
+
+#Phone and Internet services have high penetration across the customer base
+#There is a series of additional services or add-ons that can be combined
+```
+From the below couple of analysis it seems that the more add-ons a subscriber has, the less likely this customer will be to churn. As a matter of fact, the main service seems to matter less than the add-ons when it comes to drive churn, as we can see pretty simple products (Phone only) having less churn than Fiber Optics. The highest subgroup churn pockets in the base are from customers with Fiber Optic + Phone + 0 or 1 add-ons only.
+
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+clean_churn %>% 
+  mutate(MainPlay = paste("Internet: ",InternetService,"\nPhone: ",PhoneService)) %>%
+  mutate(across(c(PhoneService:MultipleLines,OnlineSecurity:StreamingMovies), YesToOneFunction)) %>%
+  mutate(AddOnsCount = rowSums(across(c(MultipleLines,OnlineSecurity:StreamingMovies)))) %>%
+  group_by(MainPlay,Churn,AddOnsCount) %>% summarize(n = n()) %>% 
+  spread(Churn,n, fill=0) %>% mutate(CustomerCount=No+Yes, churn_rate=Yes/CustomerCount) %>%
+  ggplot(aes(x=AddOnsCount,y=churn_rate)) + geom_col()  +
+  geom_hline(yintercept=avg_churn, linetype="dashed", color = "red") +
+  facet_grid(. ~ MainPlay)
+
+clean_churn %>% 
+  mutate(MainPlay = paste("Internet:",InternetService,"\nPhone:",PhoneService)) %>%
+  mutate(across(c(PhoneService:MultipleLines,OnlineSecurity:StreamingMovies), YesToOneFunction)) %>%
+  mutate(AddOnsCount = rowSums(across(c(MultipleLines,OnlineSecurity:StreamingMovies)))) %>%
+  group_by(MainPlay,Churn,AddOnsCount) %>% summarize(n = n()) %>% 
+  spread(Churn,n, fill=0) %>% mutate(CustomerCount=No+Yes, churn_rate=Yes/CustomerCount) %>%
+  ggplot(aes(area=CustomerCount, label = paste(AddOnsCount,"Add-ons"),
+             subgroup=MainPlay, subgroup2=AddOnsCount, fill = churn_rate)) +
+  geom_treemap() +
+  geom_treemap_subgroup2_border(colour = "white", size = 2) +
+  geom_treemap_subgroup_border(colour = "black", size = 5) +
+  geom_treemap_text( colour = "white", place = "bottomright", grow = FALSE, size = 12) +
+  geom_treemap_subgroup_text( colour = "black", place = "topleft", grow = FALSE, size = 15) +
+  scale_fill_viridis_c() +
+  ggtitle("Churn rate and number of customers by product type and number of add-ons") +
+  xlab("Area = number of subscribers") + labs(fill = "Churn rate")
+
+#There is a very strong relation between the number of additional services or add-ons and the churn rate
+#Much more than the main service itself (for example dsl + phone has higher churn than phone alone)
+```
+Our dataset details also 4 different payment methods for customers and two bill modalities (Paper and Paperless). We can observe how "Electronic check" seems to drive higher churn rate than other methods, as well as an overall higher churn rate for customers opting for "Paperless" billing when compared accross categories.
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+clean_churn %>%
+  group_by(PaymentMethod,PaperlessBilling,Churn) %>% summarize(n = n()) %>% 
+  spread(Churn,n, fill=0) %>% mutate(CustomerCount=No+Yes, churn_rate=Yes/CustomerCount) %>%
+  mutate(PaperlessBilling = ifelse(PaperlessBilling=="Yes","Paperless","Physical Paper")) %>%
+  ggplot(aes(x=PaymentMethod, y=churn_rate)) + geom_col() +
+  geom_hline(yintercept=avg_churn, linetype="dashed", color = "red") +
+  facet_grid(PaperlessBilling~.) + coord_flip()
+
+#among different paying methods, electronic check seems to have higher churn rates
+#when it comes to paperless billing, it would look like is in fact not driving lower churn
+```
+We will not be exploring Total Charges as they are mainly a function of MonthlyCharges and tenure, however Monthly Charges show insightful relationships. Monthly Charges are strongly linked to the type of products chosen and to the number of add-ons opted-in by every customer, so it makes sense that customers with lowest Monthly Charges among a main product also display the highest levels of churn.
+```{r, echo=FALSE, fig.align='center', out.width = "75%", warning=FALSE, message=FALSE}
+#exploring the churn rate levels accross monthly charges
+
+clean_churn %>% 
+  mutate(MainPlay = paste("Internet:",InternetService,"\nPhone:",PhoneService)) %>%
+  mutate(across(c(PhoneService:MultipleLines,OnlineSecurity:StreamingMovies), YesToOneFunction)) %>%
+  mutate(AddOnsCount = rowSums(across(c(MultipleLines,OnlineSecurity:StreamingMovies)))) %>%
+  ggplot(aes(x=MonthlyCharges, y=..count..,fill=MainPlay)) + geom_histogram(position = "stack") 
+
+#monthly charges seem to be well associated to different product configurations
+#with less variability for the phone only lines and more spread for the different internet options
+
+clean_churn %>% mutate(Strat_MonthlyCharges = round(MonthlyCharges/5,0)*5) %>%
+  mutate(MainPlay = paste("Internet:",InternetService,"\nPhone:",PhoneService)) %>%
+  group_by(MainPlay,Churn, Strat_MonthlyCharges) %>% summarise(n = n()) %>% spread(Churn,n) %>%
+  mutate(churn_rate=Yes/(Yes+No)) %>% ggplot(aes(x=Strat_MonthlyCharges, y=churn_rate)) +
+  geom_col() + facet_grid(. ~ MainPlay, scales = "free_x") +
+  geom_hline(yintercept=avg_churn, linetype="dashed", color = "red")
+
+#overall different products have different churn rates (particularly high in fiber optics)
+#higher monthly charges seem to contribute positively to retain customers accross different products
+```
+All in all, we get a pretty good understanding of the variables in our dataset, and find meaningful relationships that should bring some predicting power to our models. Unless computational limitations arise, we will keep all possible variables as part of our models.
+
+# Initial evaluation of different models
+
+We have already partitioned the data into "training" and "test" as well as prepared it in a friendly way to evaluate a bunch of models with the "caret" package.
+
+Before going into more sophisticated models, we will create a simple model that will consist in randomly guessing if a customer will churn ("Yes") or not churn ("No"). We use this model to illustrate how we will collect model performance for subsequent tests. Being a classification problem it makes sense to look at accuracy, but since we have associated costs to False Predictions (False Positives and False Negatives), we will also be looking at a balanced Precision and Recall for each model.
+
+```{r, echo=FALSE, include=FALSE}
+##########################################################
+# First simple model and results collection methodology
+##########################################################
+
+#naive model just guessing randomnly the churn status
+```
+```{r, echo=TRUE, include=TRUE, warning=FALSE, message=FALSE}
+prediction <- as.factor(sample(c("Yes","No"),nrow(test_set),replace = TRUE))
+probability <- sample(c(1,0),nrow(test_set),replace = TRUE)
+
+model_results <- data_frame(method = "random guessing",
+        Accuracy = confusionMatrix(prediction, test_set$Churn)$overall["Accuracy"],
+        Precision = confusionMatrix(prediction, test_set$Churn)$byClass["Precision"],
+        Recall = confusionMatrix(prediction, test_set$Churn)$byClass["Recall"])
+
+prediction_results <- data_frame(guess = prediction)
+
+probability_results <- data_frame(guess = probability)
+
+model_results %>% knitr::kable()
+```
+
+We will create some data frames where we will be storing the results of our different models:
+
+* Results dataframe: Accuracy, Precision and Recall
+* Probabilities dataframe: here we will store the probabilities
+* Predictions dataframe: the predicted "Yes" / "No" values (i.e. "Yes" if probabilty is >0.5)
+
+## Fitting a group of models using caret package
+```{r, echo=FALSE,include=FALSE}
+##########################################################
+# Loop test of different algorithms with default settings with caret
+##########################################################
+```
+```{r, echo=TRUE,warning=FALSE, results=FALSE}
+models <- c("glm","lda","naive_bayes","rpart","knn","gamLoess")
+
+fits <- lapply(models, function(model){ 
+  train(Churn ~ ., method = model,data = train_set)
+})
+```
+```{r, echo=FALSE, warning=FALSE,message=FALSE, results=FALSE}
+names(fits) <- models
+
+predictions <- sapply(fits,function(object)
+  predict(object, newdata = test_set))
+
+probabilities <- sapply(fits,function(object)
+  predict(object, newdata = test_set,type = "prob")$Yes)
+
+predictions <- as.data.frame(predictions)
+probabilities <- as.data.frame(probabilities)
+
+accuracies <- sapply(predictions,function(x) 
+  confusionMatrix(x,test_set$Churn)$overall["Accuracy"])
+precisions <- sapply(predictions,function(x) 
+  confusionMatrix(x,test_set$Churn)$byClass["Precision"])
+recalls <- sapply(predictions,function(x) 
+  confusionMatrix(x,test_set$Churn)$byClass["Recall"])
+
+model_results <- bind_rows(model_results,data_frame(method = models, 
+                                                    Accuracy = accuracies, 
+                                                    Precision = precisions,
+                                                    Recall = recalls))
+
+prediction_results <- bind_cols(prediction_results, predictions)
+
+probability_results <- bind_cols(probability_results, probabilities)
+```
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+model_results %>% knitr::kable()
+```
+Some of those give us already pretty good results, we will conduct an additional test to check how relevant are some of the variables involved. If we run, for example, glm with only top 5 variables, we observe how our accuracy results decrease from ~80% to ~78%, still very close but worth having those extra ~2 percent points.
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+##########################################################
+# test glm with less variables (5 top vars)
+##########################################################
+
+model_name <- "glm (5 top vars)"
+
+fit <- train(Churn ~ ., method = "glm",data = train_set)
+```
+```{r, echo=FALSE, fig.align='center', out.width = "75%", warning=FALSE, message=FALSE}
+plot(varImp(fit))
+```
+We conclude that using more variables has useful predicting power for our project, but if in need to decrease calculation efforts, a few variables can already provide good results.
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+fit <- train(Churn ~ Contract_cycles + PaperlessBillingYes +
+               PaymentMethodElectronic.check + SeniorCitizen +
+               tenure + ContractTwo.year + DependentsYes,
+             method = "glm",data = train_set)
+
+prediction <- predict(fit, test_set)
+probability <- predict(fit, newdata = test_set,type = "prob")$Yes
+
+model_results <- bind_rows(model_results,
+                           data_frame(method = model_name,
+                                      Accuracy = confusionMatrix(prediction, test_set$Churn)$overall["Accuracy"],
+                                      Precision = confusionMatrix(prediction, test_set$Churn)$byClass["Precision"],
+                                      Recall = confusionMatrix(prediction, test_set$Churn)$byClass["Recall"]))
+
+prediction <- as.data.frame(prediction)
+probability <- as.data.frame(probability)
+
+names(prediction) <- model_name
+names(probability) <- model_name
+
+model_results %>% filter (method == "glm" | method == "glm (5 top vars)") %>% knitr::kable()
+
+prediction_results <- bind_cols(prediction_results, prediction)
+probability_results <- bind_cols(probability_results, probability)
+```
+## Additional set of models tested
+
+To add to our first test, we also test the following models with dedicated pieces of code. For some of those we have fixed some parameters to reduce computation time (i.e. number of trees) or we have created additional pieces of code to accomodate data to the non-caret functions used. These are Random Forest, Support Vector Machine and Adaptative Boosting.
+
+```{r, echo=FALSE, message=FALSE}
+##########################################################
+# Random Forest - rf
+##########################################################
+
+model_name <- "rf (ntree = 64)"
+```
+```{r, echo=TRUE,include=FALSE,warning=FALSE,message=FALSE}
+fit <- train(Churn ~ ., method = "rf",data = train_set, ntree = 64)
+```
+```{r, echo=FALSE, include=FALSE, message=FALSE}
+fit$bestTune
+fit$results
+plot(varImp(fit))
+```
+```{r, echo=FALSE, fig.align='center', out.width = "75%", warning=FALSE, message=FALSE}
+plot(fit$finalModel)
+```
+Here's an example of our Random Forest error reducing with number of trees and stabilizing after ~64 trees. We didn't excel the results of our previous group of models, and those last techniques took a lot of training time comparatively.
+```{r, echo=FALSE, include=FALSE, warning=FALSE,message=FALSE}
+prediction <- predict(fit, test_set)
+probability <- predict(fit, newdata = test_set,type = "prob")$Yes
+
+model_results <- bind_rows(model_results,
+                           data_frame(method = model_name,
+                                      Accuracy = confusionMatrix(prediction, test_set$Churn)$overall["Accuracy"],
+                                      Precision = confusionMatrix(prediction, test_set$Churn)$byClass["Precision"],
+                                      Recall = confusionMatrix(prediction, test_set$Churn)$byClass["Recall"]))
+
+prediction <- as.data.frame(prediction)
+probability <- as.data.frame(probability)
+
+names(prediction) <- model_name
+names(probability) <- model_name
+
+model_results %>% knitr::kable()
+
+prediction_results <- bind_cols(prediction_results, prediction)
+probability_results <- bind_cols(probability_results, probability)
+
+##########################################################
+# Support Vector Machine - svmLinear2
+##########################################################
+
+#svmLinear2 has the possibility to generate probabilities
+
+model_name <- "svmLinear2"
+```
+```{r, echo=TRUE,include=FALSE,warning=FALSE,message=FALSE}
+fit <- train(Churn ~ ., method = "svmLinear2",data = train_set, probability=TRUE)
+```
+```{r, echo=FALSE, include=FALSE, warning=FALSE,message=FALSE}
+prediction <- predict(fit, test_set)
+probability <- predict(fit, newdata = test_set,type = "prob")$Yes
+
+model_results <- bind_rows(model_results,
+                           data_frame(method = model_name,
+                                      Accuracy = confusionMatrix(prediction, test_set$Churn)$overall["Accuracy"],
+                                      Precision = confusionMatrix(prediction, test_set$Churn)$byClass["Precision"],
+                                      Recall = confusionMatrix(prediction, test_set$Churn)$byClass["Recall"]))
+
+prediction <- as.data.frame(prediction)
+probability <- as.data.frame(probability)
+
+names(prediction) <- model_name
+names(probability) <- model_name
+
+model_results %>% knitr::kable()
+
+prediction_results <- bind_cols(prediction_results, prediction)
+probability_results <- bind_cols(probability_results, probability)
+
+###################################
+# Adaptative Boosting - adaboost
+###################################
+
+model_name <- "adaboost (nIter = 100)"
+```
+```{r, echo=TRUE,include=FALSE,warning=FALSE,message=FALSE}
+fit <- adaboost(Churn~., train_set, nIter = 100)
+```
+```{r, echo=FALSE, include=FALSE, warning=FALSE,message=FALSE}
+prediction <- predict(fit, test_set)$class
+probability <- predict(fit, test_set)$prob[,1]
+
+model_results <- bind_rows(model_results,
+                           data_frame(method = model_name,
+                                      Accuracy = confusionMatrix(prediction, test_set$Churn)$overall["Accuracy"],
+                                      Precision = confusionMatrix(prediction, test_set$Churn)$byClass["Precision"],
+                                      Recall = confusionMatrix(prediction, test_set$Churn)$byClass["Recall"]))
+
+prediction <- as.data.frame(prediction)
+probability <- as.data.frame(probability)
+
+names(prediction) <- model_name
+names(probability) <- model_name
+```
+```{r, echo=FALSE,include=TRUE,warning=FALSE,message=FALSE}
+model_results %>% knitr::kable()
+```
+```{r, echo=FALSE, message=FALSE}
+prediction_results <- bind_cols(prediction_results, prediction)
+probability_results <- bind_cols(probability_results, probability)
+```
+
+## Combining our models (voting ensemble)
+
+We already got a few candidates to explore further, but we will also test combining all our models in one by creating a simple voting system. The results are good but there is no drastic improvement when compared to our best models.
+
+```{r, echo=FALSE, include=FALSE, warning=FALSE,message=FALSE}
+###################################
+# Ensemble - voting system
+###################################
+
+model_name <- "ensemble (voting)"
+```
+```{r, echo=TRUE, include=TRUE, warning=FALSE,message=FALSE}
+votes <- data_frame(votes = prediction_results %>% select(-guess) %>%
+  mutate(across(.cols = everything(), YesToOneFunction)) %>% rowMeans)
+
+prediction <- votes %>% mutate(prediction = as.factor(ifelse(votes > 0.5,"Yes","No"))) %>% pull(prediction)
+```
+```{r, echo=FALSE, include=FALSE, warning=FALSE,message=FALSE}
+model_results <- bind_rows(model_results,
+                           data_frame(method = model_name,
+                                      Accuracy = confusionMatrix(prediction, test_set$Churn)$overall["Accuracy"],
+                                      Precision = confusionMatrix(prediction, test_set$Churn)$byClass["Precision"],
+                                      Recall = confusionMatrix(prediction, test_set$Churn)$byClass["Recall"]))
+
+prediction <- as.data.frame(prediction)
+probability <- as.data.frame(votes)
+
+names(prediction) <- model_name
+names(probability) <- model_name
+
+model_results %>% knitr::kable()
+names(prediction) <- model_name
+
+prediction_results <- bind_cols(prediction_results, prediction)
+probability_results <- bind_cols(probability_results, probability)
+```
+At this stage, we will proceed to compare our models and decide on a good candidate to pursue into our final predictions.
+
+# Model comparison, selection and tuning
+
+## Accuracy, ROC curves and AUC
+
+Below is a comparison of all our models and ensembles sorted by achieved accuracy. Besides our ensemble voting, GamLoess, glm and Random Forest seem to show the highest accuracy levels on our test dataset.
+
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+#######################################################################
+# Accuracy plots
+#######################################################################
+
+model_results %>% ggplot(aes(x=reorder(method,-Accuracy), y=Accuracy)) + 
+  geom_col() + coord_flip() + xlab("Method (by ascending Accuracy)")
+```
+Since we do not only care about accuracy but about good balance between positive and negative predictions, we will also use the ROC and AUC visual methods to compare our models. The pROC package provides a very useful function to display and overlay ROC curves for distinct models.
+```{r, echo=FALSE, fig.align='center',warning=FALSE, message=FALSE, results=FALSE}
+#######################################################################
+# ROC and AUC plots
+#######################################################################
+
+#Initiatie first plot with random model
+
+par(pty = "s")
+
+steps <- 0.04
+
+#Overlay the rest of the models
+
+roc(test_set$Churn, probability_results$guess, plot=TRUE, legacy.axes=TRUE,
+    xlab="False Positive Percentage", ylab="True Positive Percentage",
+    col="thistle", lwd=1, print.auc=TRUE, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$glm,col="blue",lwd=1,
+           print.auc=TRUE, add=TRUE, print.auc.y=0.5-1*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$lda,col="red",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-2*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$naive_bayes,col="green",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-3*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$rpart,col="grey",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-4*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$knn,col="darkorange",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-5*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$gamLoess,col="darkgreen",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-6*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$`rf (ntree = 64)`,col="brown",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-7*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$svmLinear2,col="purple",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-8*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$`adaboost (nIter = 100)`,col="darkblue",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-9*steps, print.auc.x=0.7)
+
+plot.roc(test_set$Churn, probability_results$`ensemble (voting)`,col="black",lwd=1,
+         print.auc=TRUE, add=TRUE, print.auc.y=0.5-10*steps, print.auc.x=0.7)
+
+legend("bottomright",
+       legend=c("guess",models,"rf","svmLinear2","adaboost","ensemble (voting)"),
+       col=c("thistle","blue","red","green","grey","darkorange","darkgreen",
+             "brown","purple","darkblue","black"),lwd=2, cex =0.6)
+
+par(pty = "m")
+```
+
+Our ROC plot confirms that GamLoess is the best performing individual model, with the greatest AUC ("Area Under the Curve") and has a good and steep "learning curve" within the first portion of our dataset. This is a feature that we are looking for since in practical terms we will seek to prioritize which groups of customers in our predictions we want to target with a discounted promotion.
+
+## Further tuning of gamLoess model
+
+By inspecting our previous default gamLoess model, we observe that the span is set at 0.5. In order to fine tune the model further we create a grid of span values and re-train the model. There is very marginal improvement with our new span value of ~0.5 as well, so we will stick to our default model for the final tests.
+
+```{r, echo=FALSE, fig.align='center',warning=FALSE, message=FALSE}
+#######################################################################
+# Tuning of gamLoess for better results
+#######################################################################
+```
+```{r, echo=TRUE, include=TRUE}
+modelLookup("gamLoess")
+```
+```{r, echo=FALSE, include=FALSE}
+#stick to degree of 1 like in rafa's textbook but play with the span values
+#default parameters gave a best tune with span = 0.5
+```
+```{r, echo=TRUE, include=TRUE}
+fits$gamLoess$bestTune
+
+grid <- expand.grid(span = seq(0.25, 0.85, len = 10), degree = 1)
+```
+```{r, echo=FALSE, include=FALSE}
+#we will not test degree grid because there is an identified bug on gamLoess package :(
+#more info in https://stackoverflow.com/questions/32043010/r-crashes-when-training-using-caret-and-method-gamloess
+```
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+fit_tune <- train(Churn ~ ., method = "gamLoess", data = train_set,tuneGrid=grid)
+
+ggplot(fit_tune, highlight = TRUE)
+```
+```{r, echo=FALSE, include=FALSE}
+fit_tune$bestTune
+```
+
+# Final model: results and outputs
+
+## Confusion matrix and lift analysis
+
+Since this is a classification problem, a very common way to illustrate the performance of our model is to use the cunfusion matrix. Below are the results for our selected model.
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+#######################################################################
+# Generating meaningful outputs of selected model
+#######################################################################
+
+fit <- fits$gamLoess
+
+prediction <- predict(fit, test_set)
+probability <- predict(fit, newdata = test_set,type = "prob")$Yes
+
+#confusion matrix
+
+final_results <- data_frame(method = "gamLoess (final)",
+                            Accuracy = confusionMatrix(prediction, test_set$Churn)$overall["Accuracy"],
+                            Precision = confusionMatrix(prediction, test_set$Churn)$byClass["Precision"],
+                            Recall = confusionMatrix(prediction, test_set$Churn)$byClass["Recall"])
+
+final_results %>% knitr::kable()
+```
+```{r, echo=FALSE, include=FALSE}
+confusionMatrix(prediction, test_set$Churn)$table %>% knitr::kable()
+```
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+plot(confusionMatrix(prediction, test_set$Churn)$table)
+```
+Once we will obtain our predictions, we can use the probabilities of churn to analyze our customer base in a sorted way. The below analysis is performed by deciles (i.e. decile 1 are the 10% customers with the highest probability to churn) and shows both gain and lift per decile:
+
+* Gain score analysis tells us, for example, that first 4 deciles would already capture 80% of our "churners"
+* Cumulative lift helps us understand how better a portion of our predictions are compared to the whole (i.e. the very first decile is 3x better than the overall "churn detection" on the entire set)
+
+The differences of "churn rate" accross deciles are very noticeable: for example the first decile is composed of churners by 78% whereas last deciles have barely a 1% of churners and should not be disturbed with promotions.
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+#gain and lift analysis preparation
+
+output <- data_frame(prediction = prediction_results$gamLoess,
+                      probabilities = probability_results$gamLoess,
+                      actuals = test_set$Churn,
+                      MonthlyCharges = test_set$MonthlyCharges)
+
+totals <- output %>% summarize(Decile = "Total",
+                                Subscribers = n(),
+                                Churners = sum(actuals == "Yes"),
+                                Churn_Rate = round(Churners / Subscribers,2),
+                                Revenues = round(sum(MonthlyCharges)),
+                                MonthlyCharges = round(mean(MonthlyCharges))) %>%
+  mutate(Cum_Churners = Churners, Cum_Subscribers = Subscribers)
+
+deciles <- output %>% mutate(decile_rank = -ntile(probabilities,10)) %>%
+  arrange(decile_rank) %>%  mutate(Decile = as.character(11+decile_rank)) %>%
+  mutate(Decile = fct_reorder(Decile, decile_rank)) %>%
+  group_by(decile_rank) %>% summarize(Decile = first(Decile),
+                                  Subscribers = n(),
+                                  Churners = sum(actuals == "Yes"),
+                                  Churn_Rate = round(Churners / Subscribers,2),
+                                  Revenues = round(sum(MonthlyCharges)),
+                                  MonthlyCharges = round(mean(MonthlyCharges))) %>% 
+  select(-decile_rank) %>% mutate(Cum_Churners = cumsum(Churners),
+                                  Cum_Subscribers = cumsum(Subscribers))
+
+
+deciles <- bind_rows(deciles,totals) %>% 
+  mutate(Lift = round(Churn_Rate/totals$Churn_Rate,1),
+         Gain_Score = round(Cum_Churners/totals$Churners,4)*100,
+         Cum_Lift = round(Gain_Score/Cum_Subscribers*totals$Subscribers/100,2))
+
+#gain and lift analysis result table
+
+deciles %>% select(Decile,Subscribers,Churners,Churn_Rate,Cum_Churners,Gain_Score,Cum_Lift) %>% knitr::kable()
+
+deciles %>% filter(Decile != "Total") %>% ggplot() +
+  geom_line(aes(x=reorder(Decile,as.numeric(Decile)),y=Gain_Score,group=1)) + 
+  geom_point(aes(x=reorder(Decile,as.numeric(Decile)),y=Gain_Score,group=1)) + 
+  xlab("Deciles (churn prediction probability)") +
+  ylab("Gain Score (cumulative coverage)")
+
+deciles %>% filter(Decile != "Total") %>% ggplot() +
+  geom_line(aes(x=reorder(Decile,as.numeric(Decile)),y=Cum_Lift,group=1)) + 
+  geom_point(aes(x=reorder(Decile,as.numeric(Decile)),y=Cum_Lift,group=1)) + 
+  xlab("Deciles (churn prediction probability)") +
+  ylab("Cumulative Lift")
+```
+From such analysis we see how we have an opportunity to prioritize and focus our promotional campaigns into the first deciles of our base. In order to make the simulation more realistic, we have created a couple of assumptions to reflect real business performance and implications.
+
+## Real business impact simulation
+
+In case a customer is likely to churn, we typically would offer a discount so that there are some chances of retaining that customer. For that purpose we create an hypothetical promotion of -30% on the current Monthly Charges, and also we will define some logical take-up rates for this offers:
+
+* For a "churner", there will be around 50% chances to retain him/her with the -30% discount
+* If we offer (by mistake) the discount to a non-churner, there will be greater chances (80%)
+
+The below simulation results will help us find a "decile cut-off" for us to narrow down the communication of this offers and make a more efficient campaign.
+
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+#simulation of real discount campaign
+
+discount <- 0.3 #30% discount on current bill
+
+opt_in = data_frame(churner = 0.5, non_churner = 0.8)
+
+revenues <- deciles %>% select(Decile,Subscribers,Churn_Rate, MonthlyCharges, Gain_Score) %>% filter(Decile != "Total") %>%
+  mutate(
+    RevLoss_DoNothing        = round(-Subscribers*Churn_Rate                                      *MonthlyCharges),
+    RevLoss_Churners         = round(-Subscribers*Churn_Rate     *(1-opt_in$churner)              *MonthlyCharges),
+    RevLoss_Saved            = round(-Subscribers*Churn_Rate     *(opt_in$churner)      *discount *MonthlyCharges),
+    RevLoss_Cannibalized     = round(-Subscribers*(1-Churn_Rate) *(opt_in$non_churner)  *discount *MonthlyCharges),
+    RevLoss_DoSomething      = RevLoss_Churners + RevLoss_Saved + RevLoss_Cannibalized,
+    NetImpact                = RevLoss_DoSomething - RevLoss_DoNothing,
+    Cum_NetImpact            = cumsum(NetImpact)
+         )
+
+revenues %>% select(Decile,RevLoss_DoNothing,RevLoss_DoSomething, NetImpact, Gain_Score,Cum_NetImpact) %>% knitr::kable()
+  
+revenues %>% ggplot() +
+  geom_bar(aes(x=reorder(Decile,as.numeric(Decile)),y=NetImpact),stat='identity') +
+  geom_line(aes(x=reorder(Decile,as.numeric(Decile)),y=Cum_NetImpact,group=1,linetype = "")) +
+  geom_point(aes(x=reorder(Decile,as.numeric(Decile)),y=Cum_NetImpact,group=1,linetype = "")) +
+  labs(linetype = "Cumulative") + xlab("Deciles (churn prediction probability)") +
+  ylab("Net Revenue Impacts")
+
+#revenue impact on business
+
+rev_base <- sum(revenues$MonthlyCharges * revenues$Subscribers)
+loss_donothing <- sum(revenues$RevLoss_DoNothing)
+loss_top3 <- sum(revenues$RevLoss_DoSomething[1:3])
+loss_bottom7 <- sum(revenues$RevLoss_DoNothing[4:7])
+
+old_case <- rev_base+loss_donothing
+new_case <- rev_base+loss_top3+loss_bottom7
+
+(new_case-old_case)/rev_base*100
+
+```
+
+The simulation indicates that it is not sensible to extend our churn prevention offers beyond decile 3 since we risk destroying more value on loyal customers than we create by saving a few churners. That means covering 67% of the churners and making less mistakes by discounting products to "non-churners" (false positives).
+
+If correctly executed, our plan will impact the business by improving by 4.8% the current revenues, that's compared to doing nothing and let customers churn.
+
+# Final model training, hold-out test and results
+
+Once we have our churn strategy clear, we can proceed to retrain the selected model with all the possible data (except the validation chunk). This will make the most of the known data in terms of learning, and we will test our final model against the validation set that we isolated since the beginning of the project.
+
+```{r, echo=FALSE,include=FALSE}
+#######################################################################
+# Final hold-out test on validation set
+#######################################################################
+
+#build the final model on the largest training available set and test on validation
+```
+```{r, echo=TRUE,warning=FALSE, results=FALSE}
+fit <- train(Churn ~ ., method = "gamLoess",data = model_churn)
+```
+```{r, echo=FALSE, fig.align='center', out.width = "75%",warning=FALSE, message=FALSE}
+prediction <- predict(fit, val_churn)
+probability <- predict(fit, newdata = val_churn,type = "prob")$Yes
+
+final_results <- data_frame(method = "gamLoess (holdout)",
+                            Accuracy = confusionMatrix(prediction, val_churn$Churn)$overall["Accuracy"],
+                            Precision = confusionMatrix(prediction, val_churn$Churn)$byClass["Precision"],
+                            Recall = confusionMatrix(prediction, val_churn$Churn)$byClass["Recall"])
+
+final_results %>% filter (method == "gamLoess (final)" | method == "gamLoess (holdout)") %>% knitr::kable()
+
+#gain and lift analysis results
+
+output <- data_frame(prediction = prediction,
+                     probabilities = probability,
+                     actuals = val_churn$Churn,
+                     MonthlyCharges = val_churn$MonthlyCharges)
+
+totals <- output %>% summarize(Decile = "Total",
+                               Subscribers = n(),
+                               Churners = sum(actuals == "Yes"),
+                               Churn_Rate = round(Churners / Subscribers,2),
+                               Revenues = round(sum(MonthlyCharges)),
+                               MonthlyCharges = round(mean(MonthlyCharges))) %>%
+  mutate(Cum_Churners = Churners, Cum_Subscribers = Subscribers)
+
+deciles <- output %>% mutate(decile_rank = -ntile(probabilities,10)) %>%
+  arrange(decile_rank) %>%  mutate(Decile = as.character(11+decile_rank)) %>%
+  mutate(Decile = fct_reorder(Decile, decile_rank)) %>%
+  group_by(decile_rank) %>% summarize(Decile = first(Decile),
+                                      Subscribers = n(),
+                                      Churners = sum(actuals == "Yes"),
+                                      Churn_Rate = round(Churners / Subscribers,2),
+                                      Revenues = round(sum(MonthlyCharges)),
+                                      MonthlyCharges = round(mean(MonthlyCharges))) %>% 
+  select(-decile_rank) %>% mutate(Cum_Churners = cumsum(Churners),
+                                  Cum_Subscribers = cumsum(Subscribers))
+
+
+deciles <- bind_rows(deciles,totals) %>% 
+  mutate(Lift = round(Churn_Rate/totals$Churn_Rate,1),
+         Gain_Score = round(Cum_Churners/totals$Churners,4)*100,
+         Cum_Lift = round(Gain_Score/Cum_Subscribers*totals$Subscribers/100,2))
+
+#gain and lift analysis result table
+
+deciles %>% select(Decile,Subscribers,Churners,Churn_Rate,Cum_Churners,Gain_Score,Cum_Lift) %>% knitr::kable()
+
+deciles %>% filter(Decile != "Total") %>% ggplot() +
+  geom_line(aes(x=reorder(Decile,as.numeric(Decile)),y=Gain_Score,group=1)) + 
+  geom_point(aes(x=reorder(Decile,as.numeric(Decile)),y=Gain_Score,group=1)) + 
+  xlab("Deciles (churn prediction probability)") +
+  ylab("Gain Score (cumulative coverage)")
+
+deciles %>% filter(Decile != "Total") %>% ggplot() +
+  geom_line(aes(x=reorder(Decile,as.numeric(Decile)),y=Cum_Lift,group=1)) + 
+  geom_point(aes(x=reorder(Decile,as.numeric(Decile)),y=Cum_Lift,group=1)) + 
+  xlab("Deciles (churn prediction probability)") +
+  ylab("Cumulative Lift")
+
+#simulation of real discount campaign
+
+revenues <- deciles %>% select(Decile,Subscribers,Churn_Rate, MonthlyCharges, Gain_Score) %>% filter(Decile != "Total") %>%
+  mutate(
+    RevLoss_DoNothing        = round(-Subscribers*Churn_Rate                                      *MonthlyCharges),
+    RevLoss_Churners         = round(-Subscribers*Churn_Rate     *(1-opt_in$churner)              *MonthlyCharges),
+    RevLoss_Saved            = round(-Subscribers*Churn_Rate     *(opt_in$churner)      *discount *MonthlyCharges),
+    RevLoss_Cannibalized     = round(-Subscribers*(1-Churn_Rate) *(opt_in$non_churner)  *discount *MonthlyCharges),
+    RevLoss_DoSomething      = RevLoss_Churners + RevLoss_Saved + RevLoss_Cannibalized,
+    NetImpact                = RevLoss_DoSomething - RevLoss_DoNothing,
+    Cum_NetImpact            = cumsum(NetImpact)
+  )
+
+revenues %>% select(Decile,RevLoss_DoNothing,RevLoss_DoSomething, NetImpact, Gain_Score,Cum_NetImpact) %>% knitr::kable()
+
+revenues %>% ggplot() +
+  geom_bar(aes(x=reorder(Decile,as.numeric(Decile)),y=NetImpact),stat='identity') +
+  geom_line(aes(x=reorder(Decile,as.numeric(Decile)),y=Cum_NetImpact,group=1,linetype = "")) +
+  geom_point(aes(x=reorder(Decile,as.numeric(Decile)),y=Cum_NetImpact,group=1,linetype = "")) +
+  labs(linetype = "Cumulative") + xlab("Deciles (churn prediction probability)") +
+  ylab("Net Revenue Impacts")
+
+#revenue impact on business
+
+rev_base <- sum(revenues$MonthlyCharges * revenues$Subscribers)
+loss_donothing <- sum(revenues$RevLoss_DoNothing)
+loss_top3 <- sum(revenues$RevLoss_DoSomething[1:3])
+loss_bottom7 <- sum(revenues$RevLoss_DoNothing[4:7])
+
+old_case <- rev_base+loss_donothing
+new_case <- rev_base+loss_top3+loss_bottom7
+
+(new_case-old_case)/rev_base*100
+
+#######################################################################
+# End of script
+#######################################################################
+```
+
+The results on the validation set are very much in line with our last simulations, and are as follows:
+
+* A model accuracy of ~81% (with ~68% precision and ~53% recall)
+* A lift of 3x for the very first decile
+* A positive net impact until the 3rd decile
+* A total revenue impact of 4.5% (vs. ~4.8% on the test data)
+
+# Final conclusions
+
+Several of the most common classification models provided usable results when ran on default parameters. Some of the models had a very long computing time for a marginal improved accuracy, so we could privilege simple models depending on the business requirements. Also, the consideration of multiple variables vs. a few seems to provide additional prediction power, hence value creation for the Telco company.
+
+For such a critical customer event like churn, an approach to predict succesfully ~80% of churn status in the base proves to be very powerful, and the final revenue impact result (~4-5%) of revenues is considerable. The final approach also is quite simple as only 30% (3 deciles) of the base will be have to be addressed in order to preserve value, making the Telco save money and time (vs. a blanket approach).
+
+Given the homogeneity of some initial results, a further study could explore tuning of different techniques or more fancy ways to ensemble a few models to improve results further.
+
+Finally, the model should be monitored for subsequent months, as our available training data consists of only one period of one month. It could very well be that year seasonality has a role to play in churn as well. Our model could also be nurtured with additional data or from more sophisticated engineered variables.
